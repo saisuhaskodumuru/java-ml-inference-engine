@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Java ML Inference Engine — Personal Project</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+  header { padding: 28px 20px 8px; max-width: 960px; margin: 0 auto; }
+  header h1 { margin: 0 0 6px; font-size: 28px; }
+  header p { margin: 0; color: #94a3b8; }
+  main { max-width: 960px; margin: 0 auto; padding: 16px 20px 40px; display: grid; gap: 16px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 18px; }
+  .card h2 { margin: 0 0 12px; font-size: 18px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { color: #94a3b8; font-size: 13px; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+  input, select { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; }
+  button { padding: 10px 16px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; }
+  button.secondary { background: #334155; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  pre { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; overflow: auto; font-size: 13px; white-space: pre-wrap; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; }
+  .LOW { background: #14532d; color: #bbf7d0; } .MEDIUM { background: #713f12; color: #fde68a; }
+  .HIGH { background: #7c2d12; color: #fed7aa; } .CRITICAL { background: #7f1d1d; color: #fecaca; }
+  .muted { color: #94a3b8; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Java ML Inference Engine</h1>
+  <p>Personal project — optimized Java 21 services for concurrent ML model inference. Local logistic model (<code>local-logistic-v1</code>), virtual threads, no database, synthetic data only.</p>
+</header>
+<main>
+  <section class="card">
+    <h2>Live stats</h2>
+    <div class="stats" id="stats">
+      <div class="stat"><b id="s-total">0</b><span>requests served</span></div>
+      <div class="stat"><b id="s-avg">0 ms</b><span>avg latency</span></div>
+      <div class="stat"><b id="s-p50">0 ms</b><span>p50 latency</span></div>
+      <div class="stat"><b id="s-p95">0 ms</b><span>p95 latency</span></div>
+      <div class="stat"><b id="s-batch">0</b><span>batch requests</span></div>
+      <div class="stat"><b id="s-rej">0</b><span>rejected (saturated)</span></div>
+    </div>
+    <p class="muted" id="s-model">Model: local-logistic-v1 · Virtual threads: on</p>
+  </section>
+
+  <section class="card">
+    <h2>Score a transaction</h2>
+    <form id="predict-form">
+      <div><label>Amount (USD)</label><input id="f-amount" type="number" step="0.01" min="0.01" value="12400" required></div>
+      <div><label>Merchant category</label>
+        <select id="f-category">
+          <option>CRYPTO</option><option>GROCERIES</option><option>RETAIL</option>
+          <option>ELECTRONICS</option><option>TRAVEL</option><option>GAMBLING</option>
+          <option>ENTERTAINMENT</option><option>FUEL</option>
+        </select></div>
+      <div><label>Country</label><input id="f-country" type="text" value="NG" required></div>
+      <div><label>Hour of day (UTC)</label><input id="f-hour" type="number" min="0" max="23" value="2" required></div>
+      <div><label>Transactions last hour</label><input id="f-velocity" type="number" min="0" value="0" required></div>
+      <div><label>Customer avg amount (USD)</label><input id="f-avg" type="number" step="0.01" min="0.01" value="250" required></div>
+      <div><label><input id="f-newdevice" type="checkbox" checked style="width:auto"> New device</label></div>
+      <div><label><input id="f-foreign" type="checkbox" checked style="width:auto"> Foreign country</label></div>
+    </form>
+    <div class="row">
+      <button type="submit" form="predict-form">Score it</button>
+      <button class="secondary" id="sample-fraud">High-risk sample</button>
+      <button class="secondary" id="sample-normal">Normal sample</button>
+      <button class="secondary" id="run-batch">Run 500-item batch</button>
+    </div>
+    <div id="result" style="margin-top:14px"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+async function refreshStats() {
+  try {
+    const r = await fetch('/api/v1/inference/stats');
+    const s = await r.json();
+    $('s-total').textContent = s.totalRequests;
+    $('s-avg').textContent = s.avgLatencyMs + ' ms';
+    $('s-p50').textContent = s.p50LatencyMs + ' ms';
+    $('s-p95').textContent = s.p95LatencyMs + ' ms';
+    $('s-batch').textContent = s.batchRequests;
+    $('s-rej').textContent = s.rejected;
+  } catch (e) { /* server not up yet */ }
+}
+function readForm() {
+  return {
+    id: 'TXN-UI-' + Date.now(), customerId: 'CUST-UI', amount: parseFloat($('f-amount').value),
+    currency: 'USD', merchant: 'Demo Merchant', merchantCategory: $('f-category').value,
+    country: $('f-country').value, deviceId: $('f-newdevice').checked ? 'DEV-UNKNOWN' : 'DEV-1042',
+    hourOfDay: parseInt($('f-hour').value), transactionsLastHour: parseInt($('f-velocity').value),
+    customerAvgAmount: parseFloat($('f-avg').value), newDevice: $('f-newdevice').checked,
+    foreignCountry: $('f-foreign').checked
+  };
+}
+function showResult(r) {
+  $('result').innerHTML =
+    '<p>Score <b>' + r.score + '</b> <span class="badge ' + r.riskBand + '">' + r.riskBand + '</span> ' +
+    r.classification + ' · model ' + r.model + ' · ' + r.inferenceMs + ' ms</p>' +
+    '<pre>' + JSON.stringify(r, null, 2) + '</pre>';
+  refreshStats();
+}
+$('predict-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const r = await fetch('/api/v1/inference/predict', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(readForm()) });
+  showResult(await r.json());
+});
+async function loadSample(kind) {
+  const r = await fetch('/api/v1/inference/samples');
+  const samples = await r.json();
+  const s = kind === 'fraud' ? samples[0] : samples[1];
+  $('f-amount').value = s.amount; $('f-category').value = s.merchantCategory; $('f-country').value = s.country;
+  $('f-hour').value = s.hourOfDay; $('f-velocity').value = s.transactionsLastHour; $('f-avg').value = s.customerAvgAmount;
+  $('f-newdevice').checked = s.newDevice; $('f-foreign').checked = s.foreignCountry;
+  const p = await fetch('/api/v1/inference/predict', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(s) });
+  showResult(await p.json());
+}
+$('sample-fraud').addEventListener('click', () => loadSample('fraud'));
+$('sample-normal').addEventListener('click', () => loadSample('normal'));
+$('run-batch').addEventListener('click', async () => {
+  const cats = ['GROCERIES','RETAIL','TRAVEL','ELECTRONICS','CRYPTO'];
+  const items = Array.from({length: 500}, (_, i) => ({
+    id: 'TXN-UI-BATCH-' + i, customerId: 'CUST-' + (i % 50), amount: Math.round((5 + Math.random() * 2000) * 100) / 100,
+    currency: 'USD', merchant: 'Demo', merchantCategory: cats[i % cats.length], country: i % 10 === 0 ? 'NG' : 'US',
+    deviceId: 'DEV-' + i, hourOfDay: i % 24, transactionsLastHour: i % 5, customerAvgAmount: 250,
+    newDevice: i % 7 === 0, foreignCountry: i % 10 === 0
+  }));
+  const t0 = performance.now();
+  const r = await fetch('/api/v1/inference/batch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(items) });
+  const b = await r.json();
+  const wall = Math.round(performance.now() - t0);
+  $('result').innerHTML = '<p>Batch: <b>' + b.count + '</b> scored in <b>' + b.totalMs + ' ms</b> server-side (' + wall + ' ms wall clock from the browser).</p><pre>' + JSON.stringify({count: b.count, totalMs: b.totalMs, first: b.results[0]}, null, 2) + '</pre>';
+  refreshStats();
+});
+refreshStats();
+setInterval(refreshStats, 3000);
+</script>
+</body>
+</html>
